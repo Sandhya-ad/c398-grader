@@ -1,4 +1,6 @@
-*.pdf
+# *.pdf
 *.json
 *.csv
 __pycache__/
+venv/
+grading_files/
