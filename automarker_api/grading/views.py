@@ -8,16 +8,14 @@ from django.http import HttpResponse
 from io import BytesIO
 import zipfile
 import time
+import json
+import statistics
+import matplotlib
+matplotlib.use("Agg") 
+import matplotlib.pyplot as plt
+
 
 from .omr import mark_file, mark_single_file
-
-API_KEY = None  # set to a string or env if you want to require it
-def require_api_key(request):
-    global API_KEY
-    if not API_KEY:
-        return  # no auth required if unset
-    if request.headers.get("X-API-Key") != API_KEY:
-        return Response({"detail": "Unauthorized"}, status=401)
 
 
 class DemoGradeView(APIView):
@@ -41,10 +39,6 @@ class GradeSingleView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
-        # (optional) api key check
-        auth_fail = require_api_key(request)
-        if auth_fail:
-            return auth_fail
 
         attempt_pdf = request.FILES.get("attempt_pdf")
         answer_key = request.FILES.get("answer_key")
@@ -75,11 +69,6 @@ class GradeBatchView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
-        # (optional) api key check
-        auth_fail = require_api_key(request)
-        if auth_fail:
-            return auth_fail
-
         answer_key = request.FILES.get("answer_key")
         attempts = request.FILES.getlist("attempts")
         if not answer_key or not attempts:
@@ -91,9 +80,10 @@ class GradeBatchView(APIView):
             if f.content_type != "application/pdf":
                 return Response({"detail": f"{f.name} is not a PDF"}, status=400)
 
-        # Read answer once!
+        # Read answer
         answer_bytes = answer_key.read()
 
+        # results: list of (filename, score, total, marked_bytes)
         results = []
         for f in attempts:
             attempt_bytes = f.read()
@@ -105,18 +95,81 @@ class GradeBatchView(APIView):
             except Exception as e:
                 return Response({"detail": f"{f.name}: {e}"}, status=500)
 
-        # Build ZIP
+        # ---- build per-attempt JSON + stats ----
+        attempts_json = []
+        scores = []
+        percents = []
+
+        for name, score, total, marked in results:
+            pct = (100.0 * score / total) if total else 0.0
+            scores.append(score)
+            percents.append(pct)
+            attempts_json.append({
+                "filename": name,
+                "score": score,
+                "total": total,
+                "percent": round(pct, 2),
+            })
+
+        # simple stats
+        stats = {}
+        if scores:
+            stats = {
+                "num_attempts": len(scores),
+                "score_min": min(scores),
+                "score_max": max(scores),
+                "score_mean": round(statistics.mean(scores), 2),
+                "percent_min": round(min(percents), 2),
+                "percent_max": round(max(percents), 2),
+                "percent_mean": round(statistics.mean(percents), 2),
+            }
+            if len(scores) >= 2:
+                stats["score_median"] = round(statistics.median(scores), 2)
+                stats["percent_median"] = round(statistics.median(percents), 2)
+
+        stats_payload = {
+            "attempts": attempts_json,
+            "stats": stats,
+        }
+
+        # ---- generate a score distribution plot as PNG ----
+        graph_bytes = None
+        if percents:
+            fig, ax = plt.subplots()
+            ax.hist(percents, bins=10)
+            ax.set_xlabel("Score (%)")
+            ax.set_ylabel("Number of students")
+            ax.set_title("Score Distribution")
+
+            img_buf = BytesIO()
+            fig.savefig(img_buf, format="png", bbox_inches="tight")
+            plt.close(fig)
+            img_buf.seek(0)
+            graph_bytes = img_buf.getvalue()
+
+        # ---- Build ZIP with PDFs, summary.csv, stats.json, and graph.png ----
         buf = BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            # add each graded file and a summary.csv
+            # CSV summary
             lines = ["filename,score,total,percent"]
-            for name, score, total, marked in results:
-                pct = (100.0 * score / total) if total else 0.0
-                lines.append(f'{name},{score},{total},{pct:.2f}')
-                zf.writestr(f"Graded_{name}", marked)
+            for row in attempts_json:
+                lines.append(
+                    f'{row["filename"]},{row["score"]},{row["total"]},{row["percent"]:.2f}'
+                )
             zf.writestr("summary.csv", "\n".join(lines))
-        buf.seek(0)
 
+            # JSON stats
+            zf.writestr("stats.json", json.dumps(stats_payload, indent=2))
+
+            # PNG graph (optional – only if we had data)
+            if graph_bytes is not None:
+                zf.writestr("score_distribution.png", graph_bytes)
+
+            # graded PDFs
+            for name, score, total, marked in results:
+                zf.writestr(f"Graded_{name}", marked)
+
+        buf.seek(0)
         resp = HttpResponse(buf.getvalue(), content_type="application/zip")
         resp["Content-Disposition"] = f'attachment; filename="graded_{int(time.time())}.zip"'
         return resp

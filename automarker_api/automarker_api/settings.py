@@ -26,9 +26,14 @@ MEDIA_ROOT = BASE_DIR / 'media'
 SECRET_KEY = 'django-insecure-cwi^!%+x&v10vz*@zy-$b&3e=4*!c1+rw!jhsz+ssyddq0m$wn'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
-ALLOWED_HOSTS = ['0.0.0.0', '127.0.0.1:8000', 'localhost', 'localhost:8000','*']
+ALLOWED_HOSTS = [
+    "127.0.0.1",
+    "localhost",
+    "2605:fd00:4:1001:f816:3eff:fead:88c3",
+    "[2605:fd00:4:1001:f816:3eff:fead:88c3]",
+]
 
 # Application definition
 
