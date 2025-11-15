@@ -128,8 +128,8 @@ class GradeBatchView(APIView):
                 stats["percent_median"] = round(statistics.median(percents), 2)
 
         stats_payload = {
-            "attempts": attempts_json,
             "stats": stats,
+            "attempts": attempts_json,
         }
 
         # ---- generate a score distribution plot as PNG ----
@@ -165,9 +165,9 @@ class GradeBatchView(APIView):
             if graph_bytes is not None:
                 zf.writestr("score_distribution.png", graph_bytes)
 
-            # graded PDFs
+            # graded PDFs in folder "graded/"
             for name, score, total, marked in results:
-                zf.writestr(f"Graded_{name}", marked)
+                zf.writestr(f"graded/Graded_{name}", marked)
 
         buf.seek(0)
         resp = HttpResponse(buf.getvalue(), content_type="application/zip")
